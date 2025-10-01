@@ -24,6 +24,10 @@ co2_cols = [
 df_energy = df_energy[energy_cols].copy()
 df_co2 = df_co2[co2_cols].copy()
 
+# Filter years between 1950 and 2023
+df_energy = df_energy[(df_energy["year"] >= 1950) & (df_energy["year"] <= 2023)]
+df_co2 = df_co2[(df_co2["year"] >= 1950) & (df_co2["year"] <= 2023)]
+
 # Rename columns for clarity
 df_energy.rename(columns={
     "primary_energy_consumption": "primary_energy_TWh",
@@ -43,6 +47,7 @@ df_co2.rename(columns={
     "flaring_co2": "flaring_CO2_Mt",
     "consumption_co2": "consumption_CO2_Mt"
 }, inplace=True)
+
 
 # -------------------------
 # 3. Standardize units
