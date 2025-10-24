@@ -1,93 +1,107 @@
 import pandas as pd
 import numpy as np
+import warnings
 
-# -------------------------
-# 1. Load raw datasets
-# -------------------------
-df_energy = pd.read_csv("data/raw/owid-energy-data.csv")
-df_co2 = pd.read_csv("data/raw/owid-co2-data.csv")
+warnings.simplefilter(action="ignore", category=FutureWarning)
+pd.set_option('future.no_silent_downcasting', True)
 
-# -------------------------
-# 2. Select & rename columns
-# -------------------------
-energy_cols = [
-    "iso_code", "country", "year", "population", "gdp",
-    "primary_energy_consumption", "coal_consumption", "oil_consumption",
-    "gas_consumption", "renewables_consumption", "electricity_generation"
-]
+# ===============================
+# 1️⃣ Load datasets
+# ===============================
+energy = pd.read_csv("https://raw.githubusercontent.com/owid/energy-data/master/owid-energy-data.csv")
+co2 = pd.read_csv("https://raw.githubusercontent.com/owid/co2-data/master/owid-co2-data.csv")
 
-co2_cols = [
-    "iso_code", "year", "co2", "coal_co2", "oil_co2",
-    "gas_co2", "cement_co2", "flaring_co2", "consumption_co2"
-]
+print(f"✅ Loaded datasets:\n  Energy: {energy.shape}\n  CO₂: {co2.shape}")
 
-df_energy = df_energy[energy_cols].copy()
-df_co2 = df_co2[co2_cols].copy()
+# ===============================
+# 2️⃣ Filter post-1990 & top countries
+# ===============================
+energy = energy[energy["year"] >= 1990]
+co2 = co2[co2["year"] >= 1990]
 
-# Filter years between 1950 and 2023
-df_energy = df_energy[(df_energy["year"] >= 1950) & (df_energy["year"] <= 2023)]
-df_co2 = df_co2[(df_co2["year"] >= 1950) & (df_co2["year"] <= 2023)]
+top = (
+    energy.groupby("country")["primary_energy_consumption"]
+    .max()
+    .sort_values(ascending=False)
+    .head(50)
+    .index
+)
+energy = energy[energy["country"].isin(top)]
+co2 = co2[co2["country"].isin(top)]
 
-# Rename columns for clarity
-df_energy.rename(columns={
-    "primary_energy_consumption": "primary_energy_TWh",
-    "coal_consumption": "coal_TWh",
-    "oil_consumption": "oil_TWh",
-    "gas_consumption": "gas_TWh",
-    "renewables_consumption": "renewables_TWh",
-    "electricity_generation": "electricity_TWh"
-}, inplace=True)
-
-df_co2.rename(columns={
-    "co2": "total_CO2_Mt",
-    "coal_co2": "coal_CO2_Mt",
-    "oil_co2": "oil_CO2_Mt",
-    "gas_co2": "gas_CO2_Mt",
-    "cement_co2": "cement_CO2_Mt",
-    "flaring_co2": "flaring_CO2_Mt",
-    "consumption_co2": "consumption_CO2_Mt"
-}, inplace=True)
-
-
-# -------------------------
-# 3. Standardize units
-# -------------------------
-energy_columns = ["primary_energy_TWh", "coal_TWh", "oil_TWh", "gas_TWh", "renewables_TWh", "electricity_TWh"]
-for col in energy_columns:
-    if df_energy[col].max() > 1e6:  # likely MWh
-        df_energy[col] = df_energy[col] / 1e6  # convert to TWh
-
-# -------------------------
-# 4. Merge datasets
-# -------------------------
-df_merged = df_energy.merge(df_co2, on=["iso_code", "year"], how="left")
-
-# -------------------------
-# 5. Handle missing data
-# -------------------------
-# Interpolate short gaps (≤2 years) per country
-df_merged = df_merged.sort_values(["iso_code", "year"])
-
-columns_to_interp = energy_columns + [
-    "total_CO2_Mt","coal_CO2_Mt","oil_CO2_Mt","gas_CO2_Mt",
-    "cement_CO2_Mt","flaring_CO2_Mt","consumption_CO2_Mt"
-]
-
-df_merged[columns_to_interp] = df_merged.groupby("iso_code")[columns_to_interp].transform(
-    lambda x: x.interpolate(limit=2)
+# ===============================
+# 3️⃣ Merge
+# ===============================
+merged = pd.merge(
+    energy,
+    co2,
+    on=["country", "year"],
+    how="outer",
+    suffixes=("_energy", "_co2"),
 )
 
-# Optional: flag countries with longer gaps
-long_gaps = df_merged.groupby("iso_code")[columns_to_interp].apply(
-    lambda g: g.isna().any()
+print(f"✅ Merged shape: {merged.shape}")
+
+# ===============================
+# 4️⃣ Clean missing values
+# ===============================
+merged = merged.sort_values(["country", "year"])
+merged = merged.groupby("country", group_keys=False).apply(lambda g: g.ffill().bfill())
+merged = merged.fillna(merged.median(numeric_only=True))
+
+# ===============================
+# 5️⃣ Derived features
+# ===============================
+def safe_div(num, denom):
+    return num / (denom.replace(0, np.nan) + 1e-6)
+
+merged["energy_per_capita_calc"] = safe_div(
+    merged["primary_energy_consumption_energy"], merged["population_energy"]
 )
-print("Countries with long gaps (>2 years):")
-print(long_gaps[long_gaps.any(axis=1)])
+merged["co2_per_capita_calc"] = safe_div(
+    merged["co2"], merged["population_co2"]
+)
+merged["energy_intensity"] = safe_div(
+    merged["primary_energy_consumption_energy"], merged["gdp_energy"]
+)
+merged["co2_intensity"] = safe_div(
+    merged["co2"], merged["gdp_co2"]
+)
 
-# -------------------------
-# 6. Save outputs
-# -------------------------
-df_energy.to_csv("data/processed/detailed_energy.csv", index=False)
-df_co2.to_csv("data/processed/detailed_co2.csv", index=False)
-df_merged.to_csv("data/processed/joined_energy_co2.csv", index=False)
+# ===============================
+# 6️⃣ Lag features
+# ===============================
+def create_lags(df, cols, lags=[1, 2, 3]):
+    for c in cols:
+        if c in df.columns:
+            for l in lags:
+                df[f"{c}_lag{l}"] = df.groupby("country")[c].shift(l)
+    return df
 
+lag_cols = [
+    "primary_energy_consumption_energy",
+    "co2",
+    "energy_intensity",
+    "co2_intensity",
+]
+merged = create_lags(merged, lag_cols)
+merged = merged.dropna().reset_index(drop=True)
+
+# ===============================
+# 7️⃣ Prophet dataset
+# ===============================
+prophet = merged[["country", "year", "co2"]].rename(columns={"year": "ds", "co2": "y"})
+prophet["ds"] = pd.to_datetime(prophet["ds"], format="%Y")
+
+# ===============================
+# 8️⃣ Save outputs
+# ===============================
+merged.to_csv("clean_energy_co2_lightgbm.csv", index=False)
+prophet.to_csv("clean_energy_co2_prophet.csv", index=False)
+
+print("\n✅ CSVs created successfully!")
+print("  → clean_energy_co2_lightgbm.csv")
+print("  → clean_energy_co2_prophet.csv")
+
+print("\n📊 Prophet sample:")
+print(prophet.head(3))
