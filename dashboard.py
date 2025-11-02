@@ -10,7 +10,7 @@ import plotly.graph_objects as go
 # 0️⃣  Gemini API Setup
 # ==========================================================
 # Ensure your key is set:
-#   export GOOGLE_API_KEY="AIzaSyD0RPW26ACCcTFm362hIrQQg-XdsuJI_Iw"   (Linux/Mac)
+#   export GOOGLE_API_KEY="your_key"   (Linux/Mac)
 #   setx GOOGLE_API_KEY "your_key"     (Windows)
 api_key = os.getenv("GOOGLE_API_KEY")
 if not api_key:
