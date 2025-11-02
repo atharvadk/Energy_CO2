@@ -1,132 +1,123 @@
-# ==========================================
-# 🌍 Hybrid CO₂ Forecasting (Prophet + LightGBM)
-# ==========================================
-
 import pandas as pd
-import numpy as np
 from prophet import Prophet
 import lightgbm as lgb
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import r2_score
-import warnings
+import numpy as np
 
-warnings.filterwarnings("ignore")
+# ==========================================================
+# Load Clean Data
+# ==========================================================
+energy_file = "clean_energy_co2_lightgbm.csv"
+prophet_file = "clean_energy_co2_prophet.csv"
 
-# -------------------------------
-# 1️⃣ Load preprocessed datasets
-# -------------------------------
-prophet_df = pd.read_csv("clean_energy_co2_prophet.csv")
-lightgbm_df = pd.read_csv("clean_energy_co2_lightgbm.csv")
+print("✅ Loading input data...")
+df_energy = pd.read_csv(energy_file)
+df_prophet = pd.read_csv(prophet_file)
 
-print(f"✅ Loaded Prophet data: {prophet_df.shape}")
-print(f"✅ Loaded LightGBM data: {lightgbm_df.shape}")
-
-# -------------------------------
-# 2️⃣ Prepare storage for results
-# -------------------------------
+countries = df_energy["country"].unique()
+forecast_horizon = 10
 results = []
 
-countries = sorted(set(prophet_df["country"]).intersection(set(lightgbm_df["country"])))
-print(f"🌍 Training for {len(countries)} countries...")
+print(f"🌍 Found {len(countries)} countries. Forecasting Energy + CO₂...")
 
-# -------------------------------
-# 3️⃣ Loop through each country
-# -------------------------------
-for country in countries:
+# ==========================================================
+# Per-country Prophet + LightGBM modeling
+# ==========================================================
+for c in countries:
+    c_energy = df_energy[df_energy["country"] == c].copy()
+    c_prophet = df_prophet[df_prophet["country"] == c].copy()
+
+    if c_energy.empty or c_prophet.empty:
+        continue
+
+    # Ensure proper sorting and dtype
+    c_energy = c_energy.sort_values("year")
+    c_prophet["ds"] = pd.to_datetime(c_prophet["ds"], errors="coerce")
+
+    # --------------------------------------
+    # Prophet forecast for CO₂
+    # --------------------------------------
     try:
-        # -------------------------------
-        # Prophet part
-        # -------------------------------
-        df_p = prophet_df[prophet_df["country"] == country][["ds", "y"]].dropna()
-        if len(df_p) < 10:
-            continue  # skip countries with too little data
-
-        model_p = Prophet(yearly_seasonality=False, daily_seasonality=False, weekly_seasonality=False)
-        model_p.fit(df_p)
-
-        future = model_p.make_future_dataframe(periods=10, freq="Y")
-        forecast = model_p.predict(future)
-        forecast = forecast[["ds", "yhat"]]
-        forecast["country"] = country
-        forecast["source"] = "Prophet"
-
-        # -------------------------------
-        # LightGBM part
-        # -------------------------------
-        df_l = lightgbm_df[lightgbm_df["country"] == country].copy()
-        if len(df_l) < 10:
-            continue
-
-        # Identify target column
-        if "co2" in df_l.columns:
-            y = df_l["co2"]
-        elif "co2_co2" in df_l.columns:
-            y = df_l["co2_co2"]
-        else:
-            continue
-
-        feature_cols = [c for c in df_l.columns if c not in ["country", "year", "co2", "co2_co2"]]
-        X = df_l[feature_cols]
-
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
-
-        model_lgb = lgb.LGBMRegressor(
-            n_estimators=300, learning_rate=0.05, max_depth=6, subsample=0.9, colsample_bytree=0.9
-        )
-        model_lgb.fit(X_train, y_train)
-
-        preds_test = model_lgb.predict(X_test)
-        score = r2_score(y_test, preds_test)
-        print(f"✅ {country}: LightGBM R² = {score:.3f}")
-
-        # Predict next 10 years beyond last known year
-        last_year = int(df_l["year"].max())
-        future_years = list(range(last_year + 1, last_year + 11))
-
-        # Use last known feature row to extrapolate (simple assumption)
-        last_row = df_l.iloc[-1:]
-        future_rows = pd.concat([last_row] * 10, ignore_index=True)
-        future_rows["year"] = future_years
-
-        preds_future = model_lgb.predict(future_rows[feature_cols])
-        df_future = pd.DataFrame({
-            "country": country,
-            "year": future_years,
-            "lightgbm_pred": preds_future
-        })
-
-        # -------------------------------
-        # Combine Prophet + LightGBM
-        # -------------------------------
-        merged = pd.merge(
-            forecast,
-            df_future,
-            left_on=["country", forecast["ds"].dt.year],
-            right_on=["country", "year"],
-            how="inner"
-        )
-
-        merged = merged[["country", "year", "yhat", "lightgbm_pred"]]
-        merged["hybrid_forecast"] = merged["yhat"] + (merged["lightgbm_pred"] - merged["lightgbm_pred"].mean())
-
-        results.append(merged)
-
+        m_co2 = Prophet()
+        m_co2.fit(c_prophet)
+        future_co2 = m_co2.make_future_dataframe(periods=forecast_horizon, freq="Y")
+        fc_co2 = m_co2.predict(future_co2)
+        co2_forecast = fc_co2[["ds", "yhat"]].rename(columns={"yhat": "yhat_co2"})
+        co2_forecast["year"] = co2_forecast["ds"].dt.year
     except Exception as e:
-        print(f"⚠️ {country}: Skipped due to error → {e}")
+        print(f"⚠️ Prophet failed for CO₂ ({c}): {e}")
+        continue
 
-# -------------------------------
-# 4️⃣ Combine all country forecasts
-# -------------------------------
-if results:
-    hybrid_df = pd.concat(results, ignore_index=True)
-    hybrid_df.to_csv("hybrid_forecast.csv", index=False)
-    print("\n✅ Hybrid forecast successfully saved as 'hybrid_forecast.csv'")
-else:
-    print("❌ No forecasts generated (check data coverage)")
+    # --------------------------------------
+    # Prophet forecast for Energy
+    # --------------------------------------
+    if "primary_energy_consumption_energy" not in c_energy.columns:
+        print(f"⚠️ Energy column missing for {c}")
+        continue
 
-# -------------------------------
-# 5️⃣ Sample output preview
-# -------------------------------
-if results:
-    print("\n📊 Sample forecast:")
-    print(hybrid_df.head(10))
+    energy_df = c_energy[["year", "primary_energy_consumption_energy"]].dropna()
+    if len(energy_df) < 3:
+        print(f"⚠️ Not enough data for energy in {c}")
+        continue
+
+    energy_df["ds"] = pd.to_datetime(energy_df["year"], format="%Y")
+    energy_df = energy_df.rename(columns={"primary_energy_consumption_energy": "y"})
+
+    try:
+        m_energy = Prophet()
+        m_energy.fit(energy_df)
+        future_energy = m_energy.make_future_dataframe(periods=forecast_horizon, freq="Y")
+        fc_energy = m_energy.predict(future_energy)
+        energy_forecast = fc_energy[["ds", "yhat"]].rename(columns={"yhat": "yhat_energy"})
+        energy_forecast["year"] = energy_forecast["ds"].dt.year
+    except Exception as e:
+        print(f"⚠️ Prophet failed for energy ({c}): {e}")
+        continue
+
+    # --------------------------------------
+    # LightGBM forecast (CO₂)
+    # --------------------------------------
+    features = [
+        "gdp_energy", "population_energy",
+        "energy_per_capita_energy", "energy_intensity",
+        "co2_intensity", "primary_energy_consumption_energy"
+    ]
+    X = c_energy[features].fillna(0)
+    y = c_energy["co2"].fillna(0)
+
+    if len(X) < 5:
+        continue
+
+    model_co2 = lgb.LGBMRegressor(n_estimators=100)
+    model_co2.fit(X, y)
+    co2_pred = model_co2.predict(X)
+
+    # --------------------------------------
+    # LightGBM forecast (Energy)
+    # --------------------------------------
+    y_energy = c_energy["primary_energy_consumption_energy"].fillna(0)
+    model_energy = lgb.LGBMRegressor(n_estimators=100)
+    model_energy.fit(X, y_energy)
+    energy_pred = model_energy.predict(X)
+
+    # --------------------------------------
+    # Hybrid forecast merge
+    # --------------------------------------
+    merged = pd.DataFrame({
+        "country": c,
+        "year": c_energy["year"].values,
+        "yhat": np.interp(c_energy["year"], co2_forecast["year"], co2_forecast["yhat_co2"]),
+        "lightgbm_pred": co2_pred,
+        "hybrid_forecast": (np.interp(c_energy["year"], co2_forecast["year"], co2_forecast["yhat_co2"]) + co2_pred) / 2,
+        "energy_yhat": np.interp(c_energy["year"], energy_forecast["year"], energy_forecast["yhat_energy"]),
+        "energy_lightgbm_pred": energy_pred,
+        "energy_forecast": (np.interp(c_energy["year"], energy_forecast["year"], energy_forecast["yhat_energy"]) + energy_pred) / 2
+    })
+
+    results.append(merged)
+
+# ==========================================================
+# Save Output
+# ==========================================================
+final = pd.concat(results, ignore_index=True)
+final.to_csv("hybrid_forecast.csv", index=False)
+print("✅ Saved hybrid_forecast.csv with both CO₂ and Energy forecasts.")
