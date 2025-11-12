@@ -51,7 +51,6 @@ prophet_df, lightgbm_df, hybrid_df = load_data()
 # ==========================================================
 country_list = sorted(list(set(hybrid_df["country"])))
 selected_country = st.sidebar.selectbox("🌍 Select Country", country_list)
-forecast_horizon = st.sidebar.slider("Forecast Horizon (Years)", 5, 20, 10)
 model_choice = st.sidebar.selectbox(
     "🤖 Choose AI Model for Recommendations",
     ["models/gemini-2.5-flash", "models/gemini-2.5-pro"],
