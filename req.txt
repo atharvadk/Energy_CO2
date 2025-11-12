@@ -6,4 +6,6 @@ jupyter
 scikit-learn
 streamlit
 prophet
-
+google.generativeai
+plotly
+lightgbm

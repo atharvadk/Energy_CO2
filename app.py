@@ -7,7 +7,8 @@ import plotly.express as px
 import datetime
 import lightgbm as lgb
 from sklearn.metrics import mean_absolute_error, mean_squared_error
-
+#   export GOOGLE_API_KEY="your_key"   (Linux/Mac)
+#   setx GOOGLE_API_KEY "your_key"     (Windows)
 # ------------------ SETUP ------------------ #
 st.set_page_config(page_title="🌍 Energy & CO₂ Forecasting", layout="wide")
 st.title("🌍 Energy & CO₂ Forecasting")
